@@ -8,7 +8,7 @@ use classfile_parser::constant_info::ConstantInfo;
 use failure::format_err;
 use failure::Error;
 use failure::ResultExt;
-use zip::ZipArchive;
+use std::collections::HashSet;
 
 fn main() -> Result<(), Error> {
     for path in std::env::args_os().skip(1) {
@@ -38,30 +38,62 @@ fn handle(path: &OsString) -> Result<(), Error> {
         buf.clear();
         file.read_to_end(&mut buf)?;
 
-        let super_class =
-            read_super(&buf).with_context(|_| format_err!("super of {:?}", file.name()))?;
-        println!("{:?}\t{:?}\t{:?}", path, file.name(), super_class);
+        let (super_class, references) =
+            read_file(&buf).with_context(|_| format_err!("super of {:?}", file.name()))?;
+        println!(
+            "{:?}\t{:?}\t{}\t{}",
+            path,
+            file.name(),
+            super_class,
+            references.join("\t")
+        );
     }
 
     Ok(())
 }
 
-fn read_super(from: &[u8]) -> Result<String, Error> {
+fn read_file(from: &[u8]) -> Result<(String, Vec<String>), Error> {
     match class_parser(from) {
-        Ok((&[], class_file)) => {
-            match class_file
-                .const_pool
-                .get(usize::from(class_file.super_class - 1))
-            {
-                Some(ConstantInfo::Class(cc)) => {
-                    match class_file.const_pool.get(usize::from(cc.name_index - 1)) {
-                        Some(ConstantInfo::Utf8(d)) => Ok(d.utf8_string.to_string()),
-                        other => Err(format_err!("non-utf8 parent? {:?}", other)),
+        Ok((&[], clazz)) => {
+            let parent = match clazz.const_pool.get(usize::from(clazz.super_class - 1)) {
+                Some(ConstantInfo::Class(cc)) => as_str(&clazz.const_pool, cc.name_index)
+                    .with_context(|_| format_err!("parent of {:?}", cc))?,
+                other => Err(format_err!("non-class parent? {:?}", other))?,
+            };
+
+            let mut others = HashSet::with_capacity(8);
+            for con in &clazz.const_pool {
+                match con {
+                    ConstantInfo::Class(cc) => {
+                        others.insert(
+                            as_class_name(&clazz.const_pool, cc.name_index)
+                                .with_context(|_| format_err!("other class"))?,
+                        );
                     }
+                    _ => (),
                 }
-                other => Err(format_err!("non-class parent? {:?}", other)),
             }
+
+            others.remove(&parent);
+            let mut others = others.into_iter().collect::<Vec<_>>();
+            others.sort();
+            Ok((parent, others))
         }
         err => Err(format_err!("parse explosion: {:?}", err)),
+    }
+}
+
+fn as_class_name(const_pool: &[ConstantInfo], index: u16) -> Result<String, Error> {
+    match const_pool.get(usize::from(index - 1)) {
+        Some(ConstantInfo::Utf8(d)) => Ok(d.utf8_string.to_string()),
+        Some(ConstantInfo::NameAndType(nc)) => as_str(const_pool, nc.name_index),
+        other => Err(format_err!("non-utf8? {:?}", other)),
+    }
+}
+
+fn as_str(const_pool: &[ConstantInfo], index: u16) -> Result<String, Error> {
+    match const_pool.get(usize::from(index - 1)) {
+        Some(ConstantInfo::Utf8(d)) => Ok(d.utf8_string.to_string()),
+        other => Err(format_err!("non-utf8? {:?}", other)),
     }
 }
