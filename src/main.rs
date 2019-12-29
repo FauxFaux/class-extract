@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -8,7 +9,6 @@ use classfile_parser::constant_info::ConstantInfo;
 use failure::format_err;
 use failure::Error;
 use failure::ResultExt;
-use std::collections::HashSet;
 
 fn main() -> Result<(), Error> {
     for path in std::env::args_os().skip(1) {
